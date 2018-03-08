@@ -38,9 +38,40 @@ final class PushEventsThroughQueue implements EventListener
 
     /**
      * @param DomainMessage $domainMessage
-     * @return void
      */
     public function handle(DomainMessage $domainMessage)
+    {
+        if(!$domainMessage->getPayload() instanceof ShouldQueue && $this->config->get('cqrses.require_should_queue_class', false)) {
+            return $this->dispatchNow($domainMessage);
+        }
+
+        return $this->dispatchToQueue($domainMessage);
+    }
+
+    /**
+     * @param DomainMessage $domainMessage
+     */
+    private function dispatchNow(DomainMessage $domainMessage)
+    {
+        \Log::info("Dispatching Immediately: " . get_class($domainMessage->getPayload()));
+
+        $dispatcher = app(EventDispatcher::class);
+
+        $payload = $this->serializer->serialize($domainMessage->getPayload());
+
+        $event = call_user_func([
+            str_replace('.', '\\', $domainMessage->getType()),
+            'deserialize'
+        ],
+            $payload['payload']);
+
+        return $dispatcher->dispatch($domainMessage->getType(), [$event]);
+    }
+
+    /**
+     * @param DomainMessage $domainMessage
+     */
+    private function dispatchToQueue(DomainMessage $domainMessage)
     {
         $this->queue->push(
             QueueToEventDispatcher::class,
@@ -49,7 +80,7 @@ final class PushEventsThroughQueue implements EventListener
                 'playhead'    => $domainMessage->getPlayHead(),
                 'metadata'    => json_encode($this->serializer->serialize($domainMessage->getMetadata())),
                 'payload'     => json_encode($this->serializer->serialize($domainMessage->getPayload())),
-                'recorded_on' => $domainMessage->getRecordedOn()->format('Y-m-d H:i:s'),
+                'recorded_on' => (string)$domainMessage->getRecordedOn(),
                 'type'        => $domainMessage->getType(),
             ],
             $this->config->get('cqrses.queue_name', 'default')
